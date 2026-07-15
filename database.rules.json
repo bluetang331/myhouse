@@ -1,0 +1,24 @@
+{
+  "rules": {
+    "rooms": {
+      ".read": true,
+      "$uid": {
+        ".write": "auth != null && auth.uid == $uid"
+      }
+    },
+    "guestbooks": {
+      "$roomId": {
+        ".read": true,
+        "$noteId": {
+          ".write": "auth != null && ((!data.exists() && newData.child('by').val() == auth.uid) || (data.exists() && !newData.exists() && (data.child('by').val() == auth.uid || auth.uid == $roomId)))"
+        }
+      }
+    },
+    "probe": {
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        ".write": "auth != null && auth.uid == $uid"
+      }
+    }
+  }
+}
