@@ -1,4 +1,9 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<title>우리 동네</title>
 <style>
   :root{
     --sky:#BFE3F5; --cream:#FFF7EA; --peach:#FFB0A0; --grape:#7A6BA6;
@@ -6,6 +11,7 @@
     --shadow:0 3px 0 var(--line);
   }
   *{box-sizing:border-box; margin:0; padding:0;}
+  body{background:#EAF4FA;}
   #app{
     font-family:"Apple SD Gothic Neo","Pretendard","Malgun Gothic","Noto Sans KR",system-ui,sans-serif;
     color:var(--ink); font-size:15px; line-height:1.5; max-width:880px; margin:0 auto; padding:4px;
@@ -109,8 +115,6 @@
   }
   .bub:before, .bub:after{content:''; position:absolute; bottom:-9px; left:16px; border:6px solid transparent; border-top-color:var(--line); border-bottom:0;}
   .bub:after{bottom:-5px; border-top-color:var(--cream);}
-  .house .bub{right:4%; top:4%; font-size:9px; padding:2px 5px; border-width:1.5px; border-radius:8px; box-shadow:0 1px 0 var(--line); max-width:70%; z-index:5;}
-  .house .bub:before, .house .bub:after{display:none;}
   .chips{display:flex; gap:5px; flex-wrap:wrap;}
   .chip{border:2px dashed var(--line); border-radius:999px; padding:2px 9px; font-size:12px; font-weight:800; background:transparent;}
   .chip:hover{background:var(--sky); border-style:solid;}
@@ -158,7 +162,8 @@
   .foot{text-align:center; font-size:11px; color:var(--ink-soft); font-weight:700; padding:18px 10px 8px;}
   @media (prefers-reduced-motion: reduce){ *{transition:none !important;} }
 </style>
-
+</head>
+<body>
 <div id="app">
   <header>
     <div class="logo"><b>집</b><span>우리 동네</span></div>
@@ -167,11 +172,29 @@
     <div class="me" id="me"></div>
   </header>
   <div id="view"></div>
-  <div class="foot">여기 있는 집과 방명록은 이 링크를 받은 사람 모두에게 보여요.</div>
+  <div class="foot">여기 있는 집과 방명록은 이 링크를 연 사람 모두에게 보여요. · 남의 집은 구경만 할 수 있어요.</div>
 </div>
 <div class="toast" id="toast"></div>
 
-<script>
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.0/firebase-app.js';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.0/firebase-auth.js';
+import { getDatabase, ref, get, set, remove, push } from 'https://www.gstatic.com/firebasejs/11.6.0/firebase-database.js';
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBai4mPEpO43oyEYCqLr4Yl_veIeVkDVAw",
+  authDomain: "myhouse-aca77.firebaseapp.com",
+  databaseURL: "https://myhouse-aca77-default-rtdb.firebaseio.com",
+  projectId: "myhouse-aca77",
+  storageBucket: "myhouse-aca77.firebasestorage.app",
+  messagingSenderId: "409374233079",
+  appId: "1:409374233079:web:3f24b613fde0a7c3fa5ef2"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getDatabase(app);
+
 const $ = (s,r=document)=>r.querySelector(s);
 const view = $('#view');
 
@@ -208,7 +231,6 @@ const SPACES = {
 };
 const ORDER = ['room','fridge','yard'];
 const DAY = 24*60*60*1000;
-const INDEX = 'town:index';
 const STATUS_CHIPS = ['자는 중 😴','밥 먹는 중 🍚','공부 중 📚','일하는 중 💻','심심한 중 🫠','노래 듣는 중 🎧','산책 중 🌿','놀러 와 🎈'];
 
 /* ---------- window scenes ---------- */
@@ -240,13 +262,43 @@ const sceneHTML = (key, night)=>{
 let me = null;
 let state = {page:'town', roomId:null, room:null, gb:[], place:'room', edit:false, sel:null, cat:0, dirty:false};
 
-const getJSON = async (k,sh)=>{ try{ const r = await window.storage.get(k,sh); return r?JSON.parse(r.value):null; }catch(e){ return null; } };
-const setJSON = (k,v,sh)=> window.storage.set(k, JSON.stringify(v), sh);
 function toast(m){ const t=$('#toast'); t.textContent=m; t.classList.add('on'); clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove('on'),1600); }
 const esc = s => String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const when = ts => { const d=new Date(ts), m=Math.floor((Date.now()-ts)/60000);
   if(m<1) return '방금'; if(m<60) return m+'분 전'; if(m<1440) return Math.floor(m/60)+'시간 전';
   if(m<10080) return Math.floor(m/1440)+'일 전'; return `${d.getMonth()+1}월 ${d.getDate()}일`; };
+
+/* ---------- Firebase data ---------- */
+async function loadRoom(id){
+  const snap = await get(ref(db, 'rooms/'+id));
+  return snap.exists() ? snap.val() : null;
+}
+async function saveRoom(id, room){
+  if(id !== auth.currentUser?.uid) throw new Error('forbidden');
+  await set(ref(db, 'rooms/'+id), room);
+  return true;
+}
+async function listRoomIds(){
+  const snap = await get(ref(db, 'rooms'));
+  if(!snap.exists()) return [];
+  return Object.keys(snap.val());
+}
+async function loadGuestbook(roomId){
+  const snap = await get(ref(db, 'guestbooks/'+roomId));
+  if(!snap.exists()) return [];
+  return Object.entries(snap.val())
+    .map(([id, n])=>({ ...n, _id:id }))
+    .sort((a,b)=>(b.at||0)-(a.at||0))
+    .slice(0,100);
+}
+async function addGuestbookNote(roomId, note){
+  const noteRef = push(ref(db, 'guestbooks/'+roomId));
+  await set(noteRef, note);
+  return noteRef.key;
+}
+async function deleteGuestbookNote(roomId, noteId){
+  await remove(ref(db, 'guestbooks/'+roomId+'/'+noteId));
+}
 
 function blankRoom(id, nickname){
   return {id, nickname, title:nickname+'네 집', status:'', statusAt:0, scene:'city', night:false, updated:Date.now(),
@@ -255,7 +307,7 @@ function blankRoom(id, nickname){
              yard:{bg1:SKY[0], bg2:GRASS[0], items:[]} }};
 }
 function normalize(r){
-  if(!r.spaces){ // 예전 저장분 옮겨오기
+  if(!r.spaces){
     r.spaces = { room:{bg1:r.wall||WALLS[0], bg2:r.floor||FLOORS[0], items:r.items||[]},
                  fridge:{bg1:FRIDGE[0], bg2:SHELF[0], items:[]},
                  yard:{bg1:SKY[0], bg2:GRASS[0], items:[]} };
@@ -265,41 +317,27 @@ function normalize(r){
   r.title = r.title || (r.nickname+'네 집');
   r.status = r.status || '';
   r.statusAt = r.statusAt || 0;
-  if(r.status && Date.now()-r.statusAt > DAY){ r.status=''; r.statusAt=0; }  // 24시간 지나면 사라짐
+  if(r.status && Date.now()-r.statusAt > DAY){ r.status=''; r.statusAt=0; }
   r.scene = r.scene || 'city';
   r.night = !!r.night;
   return r;
 }
 
-/* ---------- 동네 명부 ----------
-   list()에만 기대면 남의 집이 안 잡히는 경우가 있어서, 모두가 같이 쓰는 명부(town:index)에
-   자기 집 번호를 적어 둔다. 들어올 때마다 내 번호가 있는지 확인하고 없으면 다시 적는다. */
-async function joinTown(id){
-  try{
-    const idx = (await getJSON(INDEX, true)) || [];
-    if(!idx.includes(id)){ idx.push(id); await setJSON(INDEX, idx, true); }
-  }catch(e){}
-}
-async function townIds(){
-  const ids = new Set();
-  try{ ((await getJSON(INDEX, true))||[]).forEach(i=>ids.add(i)); }catch(e){}
-  try{
-    const l = await window.storage.list('room:', true);
-    ((l&&l.keys)||[]).forEach(k=>ids.add(k.slice(5)));
-  }catch(e){}
-  if(me && !ids.has(me.id)){ ids.add(me.id); }
-  return [...ids];
-}
-
 /* ---------- 진단 ---------- */
 async function probe(){
-  const o = {};
-  try{ o.pw = !!(await window.storage.set('probe:p','1',false)); }catch(e){ o.pw=false; }
-  try{ o.pr = !!(await window.storage.get('probe:p',false)); }catch(e){ o.pr=false; }
-  try{ o.sw = !!(await window.storage.set('probe:s','1',true)); }catch(e){ o.sw=false; }
-  try{ o.sr = !!(await window.storage.get('probe:s',true)); }catch(e){ o.sr=false; }
-  try{ const l = await window.storage.list('room:', true); o.keys = ((l&&l.keys)||[]).length; }catch(e){ o.keys=0; }
-  try{ o.idx = ((await getJSON(INDEX,true))||[]).length; }catch(e){ o.idx=0; }
+  const o = { auth:!!auth.currentUser, rooms:0, read:false, writeOwn:false };
+  try{
+    const ids = await listRoomIds();
+    o.rooms = ids.length;
+    o.read = true;
+  }catch(e){ o.read=false; }
+  try{
+    const uid = auth.currentUser.uid;
+    const path = 'probe/'+uid;
+    await set(ref(db, path), { t:Date.now() });
+    await remove(ref(db, path));
+    o.writeOwn = true;
+  }catch(e){ o.writeOwn=false; }
   return o;
 }
 async function renderDiag(){
@@ -307,12 +345,15 @@ async function renderDiag(){
   const o = await probe();
   const ok = v => v ? '✅ 됨' : '❌ 안 됨';
   let verdict, how;
-  if(!o.sw || !o.sr){
-    verdict = '이 기기·계정에서는 저장이 아예 안 돼요.';
-    how = `저장 기능은 <b>Pro 이상 유료 플랜</b>에서, <b>Claude 웹이나 데스크톱 앱</b>으로, <b>게시된 링크</b>를 열었을 때만 동작해요. 무료 계정이거나 휴대폰 Claude 앱으로 열었다면 이 화면이 나와요. 폰이라면 폰 브라우저(사파리·크롬)로 링크를 열어 보세요.`;
-  }else if(o.idx <= 1 && o.keys <= 1){
-    verdict = '저장은 되는데, 이 동네에 나 혼자 있어요.';
-    how = `친구가 <b>리믹스(Customize) 사본</b>을 열었을 가능성이 커요. 사본은 저장 공간이 따로 놀아서 서로 영영 안 보여요. 모두가 <b>똑같은 게시 링크</b>를 열어야 해요. 링크를 다시 보내고, 집을 만든 뒤 <b>저장</b>을 한 번 눌러 달라고 해 주세요.`;
+  if(!o.auth){
+    verdict = '로그인(익명)이 안 됐어요.';
+    how = `Firebase Authentication에서 <b>익명(Anonymous)</b> 로그인을 켜 주세요.`;
+  }else if(!o.read || !o.writeOwn){
+    verdict = '데이터베이스 연결이 막혀 있어요.';
+    how = `Realtime Database 규칙을 <code>database.rules.json</code> 내용으로 바꾸고, Authentication 익명이 켜져 있는지 확인해 주세요.`;
+  }else if(o.rooms <= 1){
+    verdict = '저장은 돼요. 아직 동네에 집이 거의 없어요.';
+    how = `같은 GitHub Pages 링크를 친구에게 보내면, 각자 집을 만들고 서로 놀러 다닐 수 있어요.`;
   }else{
     verdict = '정상이에요. 동네에 다른 집이 잡혀요.';
     how = `동네에서 <b>새로고침</b>을 눌러 보세요.`;
@@ -322,9 +363,9 @@ async function renderDiag(){
       <h2 style="font-size:18px; letter-spacing:-.03em; margin-bottom:4px">진단 결과</h2>
       <p style="font-weight:800; margin-bottom:10px">${verdict}</p>
       <div class="notes">
-        <div class="note"><b>내 것만 저장</b><p>쓰기 ${ok(o.pw)} · 읽기 ${ok(o.pr)}</p></div>
-        <div class="note"><b>다 같이 쓰는 저장</b><p>쓰기 ${ok(o.sw)} · 읽기 ${ok(o.sr)}</p></div>
-        <div class="note"><b>보이는 집</b><p>명부 ${o.idx}채 · 저장소 ${o.keys}채</p></div>
+        <div class="note"><b>익명 로그인</b><p>${ok(o.auth)}</p></div>
+        <div class="note"><b>동네 읽기</b><p>${ok(o.read)} · 집 ${o.rooms}채</p></div>
+        <div class="note"><b>내 데이터 쓰기</b><p>${ok(o.writeOwn)}</p></div>
         <div class="note"><b>어떻게 하면 되나요</b><p style="font-weight:600">${how}</p></div>
       </div>
       <div class="gbrow" style="margin-top:12px"><button class="btn sm" id="dback">← 돌아가기</button></div>
@@ -333,19 +374,44 @@ async function renderDiag(){
 }
 
 /* ---------- boot ---------- */
+async function waitForUser(){
+  if(auth.currentUser) return auth.currentUser;
+  return new Promise((resolve, reject)=>{
+    const unsub = onAuthStateChanged(auth, u=>{
+      if(u){ unsub(); resolve(u); }
+    }, reject);
+  });
+}
+
 (async function(){
   $('#diag').onclick = renderDiag;
   view.innerHTML = `<div class="card center"><p>동네 여는 중…</p></div>`;
-  me = await getJSON('me', false);
-  if(!me) return onboarding();
-  render();
+  try{
+    await signInAnonymously(auth);
+    const user = await waitForUser();
+    const existing = await loadRoom(user.uid);
+    if(existing){
+      me = { id:user.uid, nickname:existing.nickname };
+      render();
+    }else{
+      onboarding();
+    }
+  }catch(e){
+    console.error(e);
+    view.innerHTML = `<div class="card center">
+      <h1>동네를 못 열었어요</h1>
+      <p>Firebase 익명 로그인·Database 규칙을 확인해 주세요.<br>「진단」을 눌러 볼 수 있어요.</p>
+      <button class="btn primary" id="retry">다시 시도</button>
+    </div>`;
+    $('#retry').onclick = ()=> location.reload();
+  }
 })();
 
 function onboarding(){
   view.innerHTML = `
     <div class="card center">
       <h1>이 동네에 집 한 채 얻기</h1>
-      <p>이름을 정하면 방 · 냉장고 · 마당이 생겨요.<br>친구들도 같은 링크로 들어와서 각자 꾸며요.</p>
+      <p>이름을 정하면 방 · 냉장고 · 마당이 생겨요.<br>친구들도 같은 링크로 들어와서 각자 꾸며요.<br><b>남의 집은 구경만</b> 할 수 있어요.</p>
       <div class="field">
         <input id="nick" maxlength="10" placeholder="이름 (10자까지)" autocomplete="off">
         <button class="btn primary" id="start">집 만들기</button>
@@ -355,18 +421,18 @@ function onboarding(){
     const nickname = $('#nick').value.trim();
     if(!nickname) return $('#nick').focus();
     $('#start').disabled = true;
-    const id = 'u'+Math.random().toString(36).slice(2,8);
+    const id = auth.currentUser.uid;
     me = {id, nickname};
-    let okMe=null, okRoom=null;
     try{
-      okMe = await setJSON('me', me, false);
-      okRoom = await setJSON('room:'+id, blankRoom(id, nickname), true);
-      await setJSON('gb:'+id, [], true);
-      await joinTown(id);
-    }catch(e){}
-    if(!okMe || !okRoom){ me = null; return renderDiag(); }   // 저장이 안 되면 조용히 넘어가지 않기
-    state.page='room'; state.roomId=id; state.edit=true; state.place='room';
-    render();
+      await saveRoom(id, blankRoom(id, nickname));
+      state.page='room'; state.roomId=id; state.edit=true; state.place='room';
+      render();
+    }catch(e){
+      console.error(e);
+      me = null;
+      toast('집 만들기가 안 됐어요.');
+      renderDiag();
+    }
   };
   $('#start').onclick = go;
   $('#nick').onkeydown = e => { if(e.key==='Enter') go(); };
@@ -400,11 +466,11 @@ async function renderTown(){
     <div class="village" id="village"><div class="empty" style="position:relative;z-index:2">동네 그리는 중…</div></div>`;
   $('#reload').onclick = renderTown;
 
-  await joinTown(me.id);
   let rooms = [];
   try{
-    rooms = (await Promise.all((await townIds()).map(id=>getJSON('room:'+id, true)))).filter(Boolean).map(normalize);
-  }catch(e){}
+    const ids = await listRoomIds();
+    rooms = (await Promise.all(ids.map(id=>loadRoom(id)))).filter(Boolean).map(normalize);
+  }catch(e){ console.error(e); }
   if(!rooms.length){
     $('#cnt').textContent='';
     $('#village').innerHTML = `<div class="empty" style="position:relative;z-index:2">동네를 못 불러왔어요. 새로고침을 눌러 보세요.</div>`;
@@ -440,10 +506,10 @@ async function renderTown(){
 async function renderRoom(){
   const mine = state.roomId === me.id;
   view.innerHTML = `<div class="card center"><p>대문 여는 중…</p></div>`;
-  const r = await getJSON('room:'+state.roomId, true);
+  const r = await loadRoom(state.roomId);
   if(!r){ toast('그 집은 사라졌어요.'); state.page='town'; return render(); }
   state.room = normalize(r);
-  state.gb = (await getJSON('gb:'+state.roomId, true)) || [];
+  state.gb = await loadGuestbook(state.roomId);
 
   view.innerHTML = `
     <div class="roombar">
@@ -627,24 +693,25 @@ function leave(next){
   else { state.dirty=false; next(); }
 }
 async function save(loud){
+  if(state.roomId !== me.id) return toast('남의 집은 저장할 수 없어요.');
   state.room.updated = Date.now();
   state.room.nickname = me.nickname;
   state.room.title = (state.room.title||'').trim() || (me.nickname+'네 집');
   try{
-    const r = await setJSON('room:'+state.roomId, state.room, true);
-    if(!r) throw 0;
-    await joinTown(state.roomId);
+    await saveRoom(state.roomId, state.room);
     state.dirty = false;
     if(loud) toast('집을 저장했어요.');
-  }catch(e){ toast('저장이 안 됐어요. 다시 눌러 주세요.'); }
+  }catch(e){
+    console.error(e);
+    toast('저장이 안 됐어요. 다시 눌러 주세요.');
+  }
 }
 
 async function surf(){
   try{
-    const l = await window.storage.list('room:', true);
-    const keys = ((l&&l.keys)||[]).filter(k=> k !== 'room:'+state.roomId);
-    if(!keys.length) return toast('아직 다른 집이 없어요.');
-    state.page='room'; state.roomId = keys[Math.floor(Math.random()*keys.length)].slice(5);
+    const ids = (await listRoomIds()).filter(id => id !== state.roomId);
+    if(!ids.length) return toast('아직 다른 집이 없어요.');
+    state.page='room'; state.roomId = ids[Math.floor(Math.random()*ids.length)];
     state.edit=false; state.sel=null; state.place='room'; state.cat=0;
     render();
   }catch(e){ toast('파도가 잔잔하네요. 다시 해 볼래요?'); }
@@ -654,34 +721,43 @@ async function surf(){
 function renderNotes(){
   const box = $('#notes');
   if(!state.gb.length){ box.innerHTML = `<div class="empty">아직 아무도 안 다녀갔어요. 첫 번째로 남겨 보세요.</div>`; return; }
-  box.innerHTML = state.gb.map((n,i)=>`
+  box.innerHTML = state.gb.map(n=>`
     <div class="note">
       <b>${esc(n.name)}</b><time>${when(n.at)}</time>
-      ${(n.by===me.id || state.roomId===me.id)?`<button class="del" data-i="${i}">지우기</button>`:''}
+      ${(n.by===me.id || state.roomId===me.id)?`<button class="del" data-id="${esc(n._id)}">지우기</button>`:''}
       <p>${esc(n.msg)}</p>
     </div>`).join('');
   box.querySelectorAll('.del').forEach(b=> b.onclick = async ()=>{
-    state.gb.splice(+b.dataset.i,1);
-    try{ await setJSON('gb:'+state.roomId, state.gb, true); renderNotes(); $('.gb h3 em').textContent = state.gb.length+'개'; }
-    catch(e){ toast('안 지워졌어요. 다시 해 볼래요?'); }
+    const noteId = b.dataset.id;
+    try{
+      await deleteGuestbookNote(state.roomId, noteId);
+      state.gb = state.gb.filter(n=>n._id!==noteId);
+      renderNotes();
+      $('.gb h3 em').textContent = state.gb.length+'개';
+    }catch(e){ toast('안 지워졌어요. 다시 해 볼래요?'); }
   });
 }
 async function postNote(){
   const ta = $('#msg'), msg = ta.value.trim();
   if(!msg) return ta.focus();
   $('#post').disabled = true;
-  state.gb.unshift({name:me.nickname, by:me.id, msg, at:Date.now()});
-  state.gb = state.gb.slice(0,100);
+  const note = {name:me.nickname, by:me.id, msg, at:Date.now()};
   try{
-    const r = await setJSON('gb:'+state.roomId, state.gb, true);
-    if(!r) throw 0;
+    const id = await addGuestbookNote(state.roomId, note);
+    state.gb.unshift({ ...note, _id:id });
+    state.gb = state.gb.slice(0,100);
     ta.value=''; $('#len').textContent='0 / 200';
     $('.gb h3 em').textContent = state.gb.length+'개';
     renderNotes(); toast('방명록을 남겼어요.');
-  }catch(e){ state.gb.shift(); toast('안 남겨졌어요. 다시 눌러 주세요.'); }
+  }catch(e){
+    console.error(e);
+    toast('안 남겨졌어요. 다시 눌러 주세요.');
+  }
   $('#post').disabled = false;
 }
 window.addEventListener('keydown', e=>{
   if(e.key==='Escape' && state.sel!==null){ state.sel=null; drawItems(); renderEditor(); }
 });
 </script>
+</body>
+</html>
